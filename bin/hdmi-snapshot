@@ -7,7 +7,7 @@
 # followed by a per-minute summary.
 #
 # Usage: hdmi-snapshot [--since "YYYY-MM-DD HH:MM:SS" | --last 30m] [-o FILE]
-#        Default: everything since the last boot, saved to the Desktop.
+#        Default: everything since the last boot, saved to <repo>/captures/.
 set -euo pipefail
 
 since="" last="" out=""
@@ -25,7 +25,9 @@ if [ -z "$since" ] && [ -z "$last" ]; then
   boot=$(sysctl -n kern.boottime | sed -E 's/.*sec = ([0-9]+).*/\1/')
   since=$(date -r "$boot" '+%Y-%m-%d %H:%M:%S')
 fi
-out=${out:-"$HOME/Desktop/hdmi-snapshot-$(date '+%Y%m%d-%H%M%S').txt"}
+captures="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)/captures"   # repo dir, via the ~/bin symlink
+mkdir -p "$captures"
+out=${out:-"$captures/hdmi-snapshot-$(date '+%Y%m%d-%H%M%S').txt"}
 
 range=(--start "$since"); [ -n "$last" ] && range=(--last "$last")
 predicate='senderImagePath CONTAINS[c] "DCP" OR (process == "WindowServer" AND eventMessage CONTAINS "hotplug")'

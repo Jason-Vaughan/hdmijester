@@ -11,7 +11,7 @@ Polls the unified log for the display controller (DCP) and shows, every second:
 Keys:  n = new segment (type a label, Enter)   r = reset current segment
        q = quit (summary is printed and saved)
 
-Every event is appended to ~/Desktop/hdmi-watch-<start>.csv for evidence.
+Every event is appended to <repo>/captures/hdmi-watch-<start>.csv for evidence.
 """
 import collections, curses, csv, os, queue, re, subprocess, sys, threading, time
 from datetime import datetime
@@ -25,6 +25,9 @@ RE_HPD = re.compile(r'HPD (\d)->(\d)')
 
 events = queue.Queue()
 
+
+# Captures live in the repo (resolved through the ~/bin symlink), git-ignored.
+CAPTURES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'captures')
 
 RE_TS = re.compile(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)')
 
@@ -134,7 +137,8 @@ def main(stdscr):
     GREEN, YELLOW, RED, CYAN = (curses.color_pair(i) for i in range(1, 5))
 
     t0 = datetime.now()
-    csv_path = os.path.expanduser(f'~/Desktop/hdmi-watch-{t0:%Y%m%d-%H%M%S}.csv')
+    os.makedirs(CAPTURES, exist_ok=True)
+    csv_path = os.path.join(CAPTURES, f'hdmi-watch-{t0:%Y%m%d-%H%M%S}.csv')
     fh = open(csv_path, 'w', newline=''); w = csv.writer(fh)
     w.writerow(['time', 'segment', 'event', 'lane0', 'lane1', 'lane2', 'detail'])
 
@@ -257,7 +261,7 @@ def main(stdscr):
         for i, (t, m, a) in enumerate(log):
             put(y + 1 + i, 0, f'{t}  {m}', a)
         if stream_dead is not None:
-            put(H - 3, 0, f'log stream exited ({stream_dead}) — restart hdmi-watch', RED)
+            put(H - 3, 0, f'log reader exited ({stream_dead}) — restart hdmi-watch', RED)
         put(H - 2, 0, f'csv: {csv_path}', curses.A_DIM)
         if typing is not None:
             put(H - 1 if H > 1 else 0, 0, f'new segment label (e.g. "cable B, HDMI2"): {typing}_', CYAN | curses.A_BOLD)

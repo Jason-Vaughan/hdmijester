@@ -22,7 +22,7 @@ Give each step at least **2 minutes** (the baseline here produced 15–35 report
 | 5 | `USB-C to DP` | USB-C/Thunderbolt → DisplayPort, bypassing the Mac's HDMI port. CED counts don't apply; watch for disconnects |
 | 6 | `cable B on other computer` | Optional: same monitor and cable on another computer. HDMI-Watch can't measure this, so just watch for dropouts |
 
-Press `q` at the end. The summary table is printed and the CSV is on the Desktop.
+Press `q` at the end. The summary table is printed and the CSV is in `captures/`.
 
 ## Reading the results
 
@@ -36,7 +36,7 @@ Press `q` at the end. The summary table is printed and the CSV is on the Desktop
 
 ## Evidence for Apple / the retailer
 
-1. Run `hdmi-snapshot` and attach the Desktop file. It has the hardware model, display mode, per-minute error table and raw log lines.
+1. Run `hdmi-snapshot` and attach the file it saves in `captures/`. It has the hardware model, display mode, per-minute error table and raw log lines.
 2. Attach the `hdmi-watch-*.csv` and a screenshot of the segments table showing the comparison.
 3. Run **Apple Diagnostics**: shut down, hold the power button until "Loading startup options" appears, then press **Cmd+D**. Write down the reference code. It doesn't specifically test the HDMI port, so a clean result doesn't clear it, but support asks for it.
 4. Check the model against the receipt: `system_profiler SPHardwareDataType | grep 'Model Identifier'` (`Mac13,1` is the 2022 M1 Max/Ultra Mac Studio).

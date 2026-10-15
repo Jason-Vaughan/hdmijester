@@ -20,9 +20,9 @@ Errors confined to one lane point to signal integrity somewhere in the cable, th
 Requirements: macOS on Apple Silicon (tested on macOS 26.7.1) and Python 3.9+. There are no third-party packages.
 
 ```sh
-git clone <this repo> ~/Documents/Projects/HDMI-Watch
-ln -s ~/Documents/Projects/HDMI-Watch/bin/hdmi-watch    ~/bin/hdmi-watch
-ln -s ~/Documents/Projects/HDMI-Watch/bin/hdmi-snapshot ~/bin/hdmi-snapshot
+git clone <this repo> ~/Documents/Projects/hdmi-watch
+ln -s ~/Documents/Projects/hdmi-watch/bin/hdmi-watch    ~/bin/hdmi-watch
+ln -s ~/Documents/Projects/hdmi-watch/bin/hdmi-snapshot ~/bin/hdmi-snapshot
 ```
 
 Admin rights aren't needed. `log show` can read these messages as a normal user.
@@ -46,17 +46,19 @@ hdmi-watch
 
 Keys: `n` starts a new labelled test segment (e.g. `cable B, HDMI 2`), `r` resets the current one, `q` quits and prints the summary table. Unplugging and replugging starts a new segment automatically.
 
-Every error event is appended to `~/Desktop/hdmi-watch-<start time>.csv`.
+Every error event is appended to `captures/hdmi-watch-<start time>.csv` inside this repo. `captures/` is git-ignored, so evidence stays local.
 
 ### Evidence snapshot
 
 ```sh
-hdmi-snapshot                 # everything since last boot → ~/Desktop/hdmi-snapshot-<time>.txt
+hdmi-snapshot                 # everything since last boot → captures/hdmi-snapshot-<time>.txt
 hdmi-snapshot --last 30m      # last 30 minutes
 hdmi-snapshot --since "2026-10-14 19:00:00" -o case-evidence.txt
 ```
 
 The snapshot contains the hardware and display configuration (serial numbers removed), a per-minute summary table, and every raw link event, ready to attach to a support case.
+
+Everything the tools write goes to `captures/` in the repo, wherever they're run from (the `~/bin` links are resolved back to the repo).
 
 ## Testing a display chain
 

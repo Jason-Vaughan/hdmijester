@@ -52,4 +52,5 @@ A reconnect (hotplug 0 → 1) starts a new segment automatically, so swapping a 
 | `bin/hdmi-watch` | Curses dashboard (Python 3, stdlib only) |
 | `bin/hdmi-snapshot` | Evidence file: hardware, per-minute summary, raw events (bash + awk) |
 | `tests/test_parse.py` | Parser tests on real log lines |
-| `~/Desktop/hdmi-watch-*.csv` | Per-run event log: `time, segment, event, lane0, lane1, lane2, detail` |
+| `captures/hdmi-snapshot-*.txt` (git-ignored) | Evidence snapshots |
+| `captures/hdmi-watch-*.csv` (git-ignored) | Per-run event log: `time, segment, event, lane0, lane1, lane2, detail` |

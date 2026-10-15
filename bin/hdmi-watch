@@ -1,0 +1,282 @@
+#!/opt/homebrew/bin/python3
+"""hdmi-watch — live HDMI link-error dashboard for Apple Silicon Macs.
+
+Polls the unified log for the display controller (DCP) and shows, every second:
+  * HDMI Character Error Detection (CED) counts per TMDS lane — bit errors the
+    monitor reports back; a clean link reports ~none
+  * "HDMI link status changed" event rate (each one is an error report)
+  * display connect / disconnect (hotplug) events
+  * per-test segments so different cables / ports / inputs can be compared
+
+Keys:  n = new segment (type a label, Enter)   r = reset current segment
+       q = quit (summary is printed and saved)
+
+Every event is appended to ~/Desktop/hdmi-watch-<start>.csv for evidence.
+"""
+import collections, curses, csv, os, queue, re, subprocess, sys, threading, time
+from datetime import datetime
+
+PREDICATE = ('senderImagePath CONTAINS[c] "DCP" OR '
+             '(process == "WindowServer" AND eventMessage CONTAINS "hotplug")')
+RE_CED = re.compile(r'CED error count update: \[(\d+)\]\[(\d+)\]\[(\d+)\]')
+RE_HOTPLUG = re.compile(r'Display (\d+) hotplug-state (\d)')
+RE_NOTACTIVE = re.compile(r'Display (\d+) get_hotplug_state - not active')
+RE_HPD = re.compile(r'HPD (\d)->(\d)')
+
+events = queue.Queue()
+
+
+RE_TS = re.compile(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)')
+
+
+def poll_lines():
+    """Yield new log lines by polling `log show` about once a second.
+
+    `log stream` never delivers the DCP (display coprocessor) messages — they
+    reach the log store by a path the live stream skips — but `log show` sees
+    them within a second or two, so poll with a small overlap and de-duplicate.
+    """
+    seen = collections.OrderedDict()
+    since = time.time() - 3
+    while True:
+        start = datetime.fromtimestamp(since - 4).strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            out = subprocess.run(['/usr/bin/log', 'show', '--style', 'compact',
+                                  '--start', start, '--predicate', PREDICATE],
+                                 capture_output=True, text=True, timeout=30).stdout
+        except subprocess.TimeoutExpired:
+            continue
+        for line in out.splitlines():
+            m = RE_TS.match(line)
+            if not m or line in seen:
+                continue
+            seen[line] = None
+            ts = datetime.strptime(m.group(1)[:26], '%Y-%m-%d %H:%M:%S.%f').timestamp()
+            since = max(since, ts)
+            yield ts, line
+        while len(seen) > 5000:
+            seen.popitem(last=False)
+        since = max(since, time.time() - 10)
+        time.sleep(1)
+
+
+def reader():
+    """Poll the log and push parsed events onto the queue."""
+    for now, line in poll_lines():
+        m = RE_CED.search(line)
+        if m:
+            events.put(('ced', now, tuple(int(x) for x in m.groups())))
+            continue
+        if 'HDMI link status changed' in line:
+            events.put(('linkchg', now, None)); continue
+        m = RE_HOTPLUG.search(line)
+        if m and m.group(1) == '1':
+            events.put(('hotplug', now, int(m.group(2)))); continue
+        m = RE_NOTACTIVE.search(line)
+        if m and m.group(1) == '1':
+            events.put(('hotplug', now, 0)); continue
+        m = RE_HPD.search(line)
+        if m and m.group(1) != m.group(2):
+            events.put(('hpd', now, f'{m.group(1)}->{m.group(2)}')); continue
+        if 'Stable=NO' in line:
+            events.put(('unstable', now, None)); continue
+
+
+class Segment:
+    def __init__(self, label):
+        self.label, self.start = label, time.time()
+        self.ced_reports = 0
+        self.lane_sum = [0, 0, 0]
+        self.lane_max = [0, 0, 0]
+        self.linkchg = 0
+        self.disconnects = 0
+        self.unstable = 0
+
+    def minutes(self):
+        return max((time.time() - self.start) / 60, 1e-9)
+
+    def row(self):
+        mins = self.minutes()
+        avg0 = self.lane_sum[0] / self.ced_reports if self.ced_reports else 0
+        return (self.label[:22], f'{mins*60:5.0f}s', f'{self.ced_reports/mins:6.1f}',
+                f'{sum(self.lane_sum)/mins:7.1f}', f'{avg0:5.1f}',
+                '/'.join(str(x) for x in self.lane_max), str(self.disconnects),
+                str(self.unstable))
+
+
+def display_mode():
+    try:
+        out = subprocess.run(['system_profiler', 'SPDisplaysDataType'],
+                             capture_output=True, text=True, timeout=20).stdout
+        names = re.findall(r'^\s{8}(\S.*):$', out, re.M)
+        res = re.findall(r'Resolution: (.*)', out)
+        hz = re.findall(r'@ ([\d.]+Hz)', out)
+        if names:
+            return f'{names[0]} — {res[0] if res else "?"} {hz[0] if hz else ""}'.strip()
+        return 'no external display detected'
+    except Exception as e:  # noqa: BLE001
+        return f'(display query failed: {e})'
+
+
+SPARK = ' ▁▂▃▄▅▆▇█'
+
+
+def spark(vals, top):
+    top = max(top, 1)
+    return ''.join(SPARK[min(8, round(v / top * 8))] if v else '·' for v in vals)
+
+
+def main(stdscr):
+    curses.curs_set(0); stdscr.nodelay(True); curses.use_default_colors()
+    for i, c in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED,
+                           curses.COLOR_CYAN), 1):
+        curses.init_pair(i, c, -1)
+    GREEN, YELLOW, RED, CYAN = (curses.color_pair(i) for i in range(1, 5))
+
+    t0 = datetime.now()
+    csv_path = os.path.expanduser(f'~/Desktop/hdmi-watch-{t0:%Y%m%d-%H%M%S}.csv')
+    fh = open(csv_path, 'w', newline=''); w = csv.writer(fh)
+    w.writerow(['time', 'segment', 'event', 'lane0', 'lane1', 'lane2', 'detail'])
+
+    threading.Thread(target=reader, daemon=True).start()
+    mode = {'v': 'querying display…'}
+    def refresh_mode():
+        mode['v'] = display_mode()
+    threading.Thread(target=refresh_mode, daemon=True).start()
+
+    segs = [Segment('baseline')]
+    err_by_sec = collections.Counter()   # event-time second -> lane-0 errors
+    rep_by_sec = collections.Counter()   # event-time second -> CED reports
+    log = collections.deque(maxlen=8)
+    last_ced, last_ced_t = (0, 0, 0), None
+    connected, stream_dead = True, None
+    typing = None
+
+    def note(msg, attr=0):
+        log.appendleft((datetime.now().strftime('%H:%M:%S'), msg, attr))
+
+    note('watching display controller log…', CYAN)
+    while True:
+        # drain events
+        try:
+            while True:
+                kind, ts, val = events.get_nowait()
+                seg = segs[-1]
+                stamp = datetime.fromtimestamp(ts).strftime('%H:%M:%S.%f')[:-3]
+                if kind == 'ced':
+                    seg.ced_reports += 1
+                    rep_by_sec[int(ts)] += 1; err_by_sec[int(ts)] += val[0]
+                    for i in range(3):
+                        seg.lane_sum[i] += val[i]; seg.lane_max[i] = max(seg.lane_max[i], val[i])
+                    last_ced, last_ced_t = val, ts
+                    w.writerow([stamp, seg.label, 'ced', *val, ''])
+                elif kind == 'linkchg':
+                    seg.linkchg += 1
+                elif kind == 'hotplug':
+                    if val == 0 and connected:
+                        connected = False; seg.disconnects += 1
+                        note('DISPLAY DISCONNECTED', RED)
+                    elif val == 1 and not connected:
+                        connected = True
+                        segs.append(Segment(f'reconnect {datetime.now():%H:%M:%S}'))
+                        note('display reconnected — new segment started', GREEN)
+                        threading.Thread(target=refresh_mode, daemon=True).start()
+                    w.writerow([stamp, seg.label, 'hotplug', '', '', '', val])
+                elif kind == 'hpd':
+                    note(f'HPD {val}', YELLOW); w.writerow([stamp, seg.label, 'hpd', '', '', '', val])
+                elif kind == 'unstable':
+                    seg.unstable += 1; note('LINK UNSTABLE reported', RED)
+                    w.writerow([stamp, seg.label, 'unstable', '', '', '', ''])
+                elif kind == 'dead':
+                    stream_dead = val
+        except queue.Empty:
+            pass
+
+        now = time.time()
+        end = int(now) - 2   # log delivery lags ~1-2 s; graph up to there
+        per_sec = [err_by_sec.get(t, 0) for t in range(end - 59, end + 1)]
+        rep_sec = [rep_by_sec.get(t, 0) for t in range(end - 59, end + 1)]
+        for t in [t for t in err_by_sec if t < end - 120]:
+            err_by_sec.pop(t, None); rep_by_sec.pop(t, None)
+        fh.flush()
+
+        # keys
+        ch = stdscr.getch()
+        if typing is not None:
+            if ch in (10, 13):
+                segs.append(Segment(typing.strip() or f'test {len(segs)}'))
+                note(f'new segment: {segs[-1].label}', CYAN); typing = None
+            elif ch in (27,):
+                typing = None
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                typing = typing[:-1]
+            elif 32 <= ch < 127:
+                typing += chr(ch)
+        elif ch in (ord('q'), ord('Q')):
+            break
+        elif ch in (ord('n'), ord('N')):
+            typing = ''
+        elif ch in (ord('r'), ord('R')):
+            segs[-1] = Segment(segs[-1].label); note('segment reset', CYAN)
+
+        # draw
+        stdscr.erase(); H, W = stdscr.getmaxyx()
+        def put(y, x, s, a=0):
+            if 0 <= y < H - 1:
+                stdscr.addnstr(y, x, s, max(0, W - x - 1), a)
+        seg = segs[-1]
+        rate = sum(rep_sec)  # reports in last 60 s
+        status = (RED, 'DISCONNECTED') if not connected else \
+                 (GREEN, 'CLEAN') if rate == 0 else \
+                 (YELLOW, 'ERRORS') if rate < 10 else (RED, 'HEAVY ERRORS')
+        put(0, 0, 'hdmi-watch', curses.A_BOLD)
+        put(0, 12, f'{datetime.now():%H:%M:%S}   {mode["v"]}')
+        put(2, 0, 'Link: '); put(2, 6, f' {status[1]} ', status[0] | curses.A_REVERSE | curses.A_BOLD)
+        put(2, 24, f'segment: {seg.label}', curses.A_BOLD)
+        put(4, 0, 'Error reports, last 60 s:'); put(4, 27, f'{rate:4d}', status[0] | curses.A_BOLD)
+        put(4, 34, '(0 = clean link)')
+        age = f'{now - last_ced_t:4.0f}s ago' if last_ced_t else 'none yet'
+        put(5, 0, 'Last CED counts [L0 L1 L2]:'); put(5, 27, f'{list(last_ced)}  ({age})')
+        put(6, 0, 'This segment:')
+        put(6, 27, f'{seg.ced_reports} reports, {seg.ced_reports/seg.minutes():.1f}/min, '
+                   f'lane max {seg.lane_max}, disconnects {seg.disconnects}')
+        put(8, 0, 'lane-0 errors / sec (60 s, newest right):')
+        put(9, 0, spark(per_sec, max(per_sec) or 1), YELLOW)
+        put(10, 0, f'peak {max(per_sec)}/s')
+
+        put(12, 0, 'Segments', curses.A_BOLD | curses.A_UNDERLINE)
+        hdr = f'{"label":22} {"time":>6} {"rep/min":>7} {"err/min":>8} {"avgL0":>5} {"maxL0/1/2":>9} {"disc":>4} {"unst":>4}'
+        put(13, 0, hdr, curses.A_DIM)
+        rows = segs[-max(1, H - 26):]
+        for i, s in enumerate(rows):
+            r = s.row()
+            line = f'{r[0]:22} {r[1]:>6} {r[2]:>7} {r[3]:>8} {r[4]:>5} {r[5]:>9} {r[6]:>4} {r[7]:>4}'
+            put(14 + i, 0, line, curses.A_BOLD if s is seg else 0)
+        y = 15 + len(rows)
+        put(y, 0, 'Events', curses.A_BOLD | curses.A_UNDERLINE)
+        for i, (t, m, a) in enumerate(log):
+            put(y + 1 + i, 0, f'{t}  {m}', a)
+        if stream_dead is not None:
+            put(H - 3, 0, f'log stream exited ({stream_dead}) — restart hdmi-watch', RED)
+        put(H - 2, 0, f'csv: {csv_path}', curses.A_DIM)
+        if typing is not None:
+            put(H - 1 if H > 1 else 0, 0, f'new segment label (e.g. "cable B, HDMI2"): {typing}_', CYAN | curses.A_BOLD)
+        else:
+            put(H - 1 if H > 1 else 0, 0, ' n new test   r reset   q quit ', curses.A_REVERSE)
+        stdscr.refresh()
+        time.sleep(0.2)
+
+    fh.close()
+    return segs, csv_path
+
+
+if __name__ == '__main__':
+    if sys.platform != 'darwin':
+        sys.exit('macOS only')
+    segs, path = curses.wrapper(main)
+    print('\nhdmi-watch summary')
+    print(f'{"label":22} {"time":>6} {"rep/min":>7} {"err/min":>8} {"avgL0":>5} {"maxL0/1/2":>9} {"disc":>4} {"unst":>4}')
+    for s in segs:
+        r = s.row()
+        print(f'{r[0]:22} {r[1]:>6} {r[2]:>7} {r[3]:>8} {r[4]:>5} {r[5]:>9} {r[6]:>4} {r[7]:>4}')
+    print(f'\nevents saved to {path}')

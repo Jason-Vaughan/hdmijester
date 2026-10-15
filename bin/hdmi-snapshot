@@ -1,0 +1,68 @@
+#!/bin/bash
+# hdmi-snapshot — save an evidence file of HDMI link health for a warranty/return case.
+#
+# Writes the Mac's hardware + display configuration (serial numbers omitted) and
+# every display-controller link event (HDMI link-status changes, CED character
+# errors, hotplug, link stability checks) from the unified log to a text file,
+# followed by a per-minute summary.
+#
+# Usage: hdmi-snapshot [--since "YYYY-MM-DD HH:MM:SS" | --last 30m] [-o FILE]
+#        Default: everything since the last boot, saved to the Desktop.
+set -euo pipefail
+
+since="" last="" out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --since) since="$2"; shift 2 ;;
+    --last)  last="$2";  shift 2 ;;
+    -o)      out="$2";   shift 2 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ -z "$since" ] && [ -z "$last" ]; then
+  boot=$(sysctl -n kern.boottime | sed -E 's/.*sec = ([0-9]+).*/\1/')
+  since=$(date -r "$boot" '+%Y-%m-%d %H:%M:%S')
+fi
+out=${out:-"$HOME/Desktop/hdmi-snapshot-$(date '+%Y%m%d-%H%M%S').txt"}
+
+range=(--start "$since"); [ -n "$last" ] && range=(--last "$last")
+predicate='senderImagePath CONTAINS[c] "DCP" OR (process == "WindowServer" AND eventMessage CONTAINS "hotplug")'
+pattern='CED error|HDMI link status|hotplug|Stable=|checkLaneStatus|HPD [01]->[01]'
+
+# NB: /usr/bin/log explicitly — zsh has a `log` builtin that shadows it.
+events=$(/usr/bin/log show --style compact "${range[@]}" --predicate "$predicate" 2>/dev/null \
+         | grep -E "$pattern" || true)
+
+{
+  echo "HDMI link snapshot — $(date)"
+  echo "Range: ${last:+last $last}${since:+since $since}"
+  echo
+  system_profiler SPHardwareDataType SPDisplaysDataType 2>/dev/null \
+    | grep -vE 'Serial|UUID|Provisioning'
+  echo "== Per-minute summary =="
+  echo "minute            link_status_changes  ced_reports  max_ced[L0/L1/L2]"
+  printf '%s\n' "$events" | awk '
+    /^[0-9]{4}-/ {
+      m = $1 " " substr($2, 1, 5)
+      if (!(m in seen)) { seen[m] = 1; order[++n] = m }
+      if ($0 ~ /HDMI link status changed/) lsc[m]++
+      if (match($0, /update: \[[0-9]+\]\[[0-9]+\]\[[0-9]+\]/)) {
+        ced[m]++
+        split(substr($0, RSTART + 8, RLENGTH - 8), v, /[][]+/)
+        for (i = 1; i <= 3; i++) if (v[i + 1] + 0 > mx[m, i]) mx[m, i] = v[i + 1] + 0
+      }
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        m = order[i]
+        printf "%-17s %20d %12d  %d/%d/%d\n", m, lsc[m], ced[m], mx[m,1], mx[m,2], mx[m,3]
+      }
+    }'
+  echo
+  echo "== Raw events ($(printf '%s\n' "$events" | grep -c . || true) lines) =="
+  printf '%s\n' "$events"
+} > "$out"
+
+echo "saved: $out"

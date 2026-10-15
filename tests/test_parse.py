@@ -1,0 +1,95 @@
+"""Parser tests for bin/hdmi-watch, using real log lines from a Mac Studio (M1 Max).
+
+Run: python3 -m unittest discover -s tests
+"""
+import importlib.machinery
+import importlib.util
+import pathlib
+import queue
+import unittest
+from unittest import mock
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+_loader = importlib.machinery.SourceFileLoader('hdmi_watch', str(ROOT / 'bin' / 'hdmi-watch'))
+_spec = importlib.util.spec_from_loader('hdmi_watch', _loader)
+hw = importlib.util.module_from_spec(_spec)
+_loader.exec_module(hw)
+
+CED = ('2026-10-14 19:42:20.123 E  kernel[0:26f] (DCP)  [DCPAVServiceHDMI.cpp::428] DCPAV[6669] '
+       'AppleDCPMCDP29XX::hdmiCharacterErrorDetectionUpdate CED error count update: [11][0][4]')
+LINK = ('2026-10-14 19:42:20.100 E  kernel[0:26f] (DCP)  [DCPDP13Service.cpp::1073] DCPAV[629] '
+        'AppleDCPMCDP29XX::handleIRQHDMILinkStatusChanged HDMI link status changed')
+PLUG_IN = ('2026-10-14 18:54:31.963 Df WindowServer[389:1146] [com.apple.coreanimation:WindowServer] '
+           'Display 1 hotplug-state 1 updating digital modes: color 0x73b00c2d0; timing 0x731004540')
+PLUG_OUT = ('2026-10-14 18:54:31.978 Df WindowServer[389:1146] [com.apple.coreanimation:WindowServer] '
+            'Display 1 get_hotplug_state - not active')
+OTHER_DISPLAY = ('2026-10-14 18:54:31.978 Df WindowServer[389:1146] [com.apple.coreanimation:WindowServer] '
+                 'Display 2 get_hotplug_state - not active')
+HPD_NOCHANGE = ('2026-10-15 01:53:28.004 Df kernel[0:b33] [com.apple.coreav:default] IOAV[230] '
+                'AppleATCDPAltModePort(atc2-dpphy)<0x100000363>::checkInitialHPDState_block_invoke: '
+                'synthesizing message=ConfigChange: HPD 0->0')
+HPD_DROP = HPD_NOCHANGE.replace('HPD 0->0', 'HPD 1->0')
+UNSTABLE = ('2026-10-14 19:42:26.000 E  kernel[0:26f] (DCP)  [DCPDPService.cpp::625] DCPAV[6678] '
+            'AppleDCPMCDP29XX::checkLinkGated ret=0x00000000 link[0]Stable=NO')
+STABLE = UNSTABLE.replace('Stable=NO', 'Stable=YES')
+
+
+def parse(*lines):
+    """Feed lines through hw.reader() and return the events it queued."""
+    hw.events = queue.Queue()
+    with mock.patch.object(hw, 'poll_lines', return_value=((1.0, l) for l in lines)):
+        hw.reader()
+    out = []
+    while not hw.events.empty():
+        kind, _ts, val = hw.events.get()
+        out.append((kind, val))
+    return out
+
+
+class ParseTests(unittest.TestCase):
+    def test_ced_counts_per_lane(self):
+        self.assertEqual(parse(CED), [('ced', (11, 0, 4))])
+
+    def test_link_status_change(self):
+        self.assertEqual(parse(LINK), [('linkchg', None)])
+
+    def test_hotplug_in_and_out_for_main_display(self):
+        self.assertEqual(parse(PLUG_IN, PLUG_OUT), [('hotplug', 1), ('hotplug', 0)])
+
+    def test_other_display_slots_ignored(self):
+        self.assertEqual(parse(OTHER_DISPLAY), [])
+
+    def test_hpd_only_reported_on_change(self):
+        self.assertEqual(parse(HPD_NOCHANGE), [])
+        self.assertEqual(parse(HPD_DROP), [('hpd', '1->0')])
+
+    def test_link_stability(self):
+        self.assertEqual(parse(UNSTABLE), [('unstable', None)])
+        self.assertEqual(parse(STABLE), [])
+
+    def test_timestamp_regex_matches_compact_style(self):
+        m = hw.RE_TS.match(CED)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), '2026-10-14 19:42:20.123')
+
+
+class SegmentTests(unittest.TestCase):
+    def test_row_rates(self):
+        seg = hw.Segment('cable A')
+        seg.start -= 120  # two minutes old
+        seg.ced_reports = 20
+        seg.lane_sum = [200, 0, 10]
+        seg.lane_max = [11, 0, 4]
+        label, secs, rep_min, err_min, avg0, lanes, disc, unst = seg.row()
+        self.assertEqual(label, 'cable A')
+        self.assertAlmostEqual(float(rep_min), 10.0, places=0)
+        self.assertAlmostEqual(float(err_min), 105.0, places=0)
+        self.assertEqual(avg0.strip(), '10.0')
+        self.assertEqual(lanes, '11/0/4')
+
+    def test_spark_marks_zero_as_dot(self):
+        self.assertEqual(hw.spark([0, 8], 8), '·█')
+
+
+if __name__ == '__main__':
+    unittest.main()

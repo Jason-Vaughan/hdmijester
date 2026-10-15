@@ -3,7 +3,7 @@
   "silentPrime": true,
   "featureIndexEnabled": false,
   "projectMapEnabled": false,
-  "releaseMode": null,
+  "releaseMode": "auto",
   "versionBumpEnabled": true,
   "versionFilePath": null,
   "wrapAutoPrEnabled": true,
@@ -64,5 +64,7 @@
     "recoveryMode": "operator"
   },
   "releasePrepareCommand": null,
-  "workloadNudge": null
+  "workloadNudge": null,
+  "medusaEnabled": false,
+  "medusaWake": false
 }

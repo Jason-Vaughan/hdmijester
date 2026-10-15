@@ -13,6 +13,7 @@ For HDMI ports (the Mac Studio HDMI port is driven through an `AppleDCPMCDP29XX`
 | `hdmiCharacterErrorDetectionUpdate CED error count update: [L0][L1][L2]` | Error counts per lane | `ced` (the three numbers) |
 | `checkLinkGated ... link[0]Stable=YES/NO` | DCP's own link stability check | `unstable` when `NO` |
 | `ConfigChange: HPD a->b` | Hot Plug Detect pin change | `hpd` when a ≠ b |
+| `handleSinkCountChanged oldCount=a newCount=b` | Monitor (sink) attached or removed: **the most reliable plug/unplug signal** | `hotplug` (b > 0 = connected) |
 
 WindowServer logs display attach and detach:
 

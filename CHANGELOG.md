@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Detect unplug/replug from the DCP `handleSinkCountChanged` message. WindowServer's "not active" line isn't logged on every cable swap, so three unplugs at 19:49–19:50 on 2026-10-14 went uncounted.
+
 ### Changed
 
 - Project folder renamed to `~/Documents/Projects/hdmi-watch`. All output (CSV runs, snapshots) now goes to the git-ignored `captures/` directory in the repo instead of the Desktop.

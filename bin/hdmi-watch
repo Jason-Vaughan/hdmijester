@@ -22,6 +22,9 @@ RE_CED = re.compile(r'CED error count update: \[(\d+)\]\[(\d+)\]\[(\d+)\]')
 RE_HOTPLUG = re.compile(r'Display (\d+) hotplug-state (\d)')
 RE_NOTACTIVE = re.compile(r'Display (\d+) get_hotplug_state - not active')
 RE_HPD = re.compile(r'HPD (\d)->(\d)')
+# DCP sink count: the most reliable plug/unplug signal (WindowServer's
+# 'not active' line is not always logged on a cable swap).
+RE_SINK = re.compile(r'handleSinkCountChanged oldCount=(\d+) newCount=(\d+)')
 
 events = queue.Queue()
 
@@ -72,6 +75,9 @@ def reader():
             continue
         if 'HDMI link status changed' in line:
             events.put(('linkchg', now, None)); continue
+        m = RE_SINK.search(line)
+        if m:
+            events.put(('hotplug', now, 1 if int(m.group(2)) > 0 else 0)); continue
         m = RE_HOTPLUG.search(line)
         if m and m.group(1) == '1':
             events.put(('hotplug', now, int(m.group(2)))); continue

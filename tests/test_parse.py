@@ -29,6 +29,9 @@ HPD_NOCHANGE = ('2026-10-15 01:53:28.004 Df kernel[0:b33] [com.apple.coreav:defa
                 'AppleATCDPAltModePort(atc2-dpphy)<0x100000363>::checkInitialHPDState_block_invoke: '
                 'synthesizing message=ConfigChange: HPD 0->0')
 HPD_DROP = HPD_NOCHANGE.replace('HPD 0->0', 'HPD 1->0')
+SINK_OUT = ('2026-10-14 19:49:57.457 E  kernel[0:26f] (DCP)  [DCPDPService.cpp::2799] DCPAV[7564] '
+            'AppleDCPMCDP29XX::handleSinkCountChanged oldCount=1 newCount=0 add=0 remove=1')
+SINK_IN = SINK_OUT.replace('oldCount=1 newCount=0 add=0 remove=1', 'oldCount=0 newCount=1 add=1 remove=0')
 UNSTABLE = ('2026-10-14 19:42:26.000 E  kernel[0:26f] (DCP)  [DCPDPService.cpp::625] DCPAV[6678] '
             'AppleDCPMCDP29XX::checkLinkGated ret=0x00000000 link[0]Stable=NO')
 STABLE = UNSTABLE.replace('Stable=NO', 'Stable=YES')
@@ -55,6 +58,9 @@ class ParseTests(unittest.TestCase):
 
     def test_hotplug_in_and_out_for_main_display(self):
         self.assertEqual(parse(PLUG_IN, PLUG_OUT), [('hotplug', 1), ('hotplug', 0)])
+
+    def test_dcp_sink_count_unplug_and_replug(self):
+        self.assertEqual(parse(SINK_OUT, SINK_IN), [('hotplug', 0), ('hotplug', 1)])
 
     def test_other_display_slots_ignored(self):
         self.assertEqual(parse(OTHER_DISPLAY), [])

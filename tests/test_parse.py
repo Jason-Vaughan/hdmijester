@@ -142,5 +142,23 @@ class DisplayModeTests(unittest.TestCase):
         self.assertNotIn('Color LCD', out)
 
 
+class LinkStateTests(unittest.TestCase):
+    def test_present_and_clean(self):
+        self.assertEqual(hw.link_state(True, True, 0), 'clean')
+
+    def test_errors_and_heavy_by_rate(self):
+        self.assertEqual(hw.link_state(True, True, 5), 'errors')
+        self.assertEqual(hw.link_state(True, True, 20), 'heavy')
+
+    def test_log_hotplug_disconnect(self):
+        self.assertEqual(hw.link_state(False, True, 0), 'disconnected')
+
+    def test_silent_disconnect_forces_disconnected_despite_stale_connected(self):
+        # The bug: a dongle dropped the display with no DCP hotplug event, so
+        # `connected` stayed True and rate 0 → used to read CLEAN. No external
+        # display present must win.
+        self.assertEqual(hw.link_state(True, False, 0), 'disconnected')
+
+
 if __name__ == '__main__':
     unittest.main()

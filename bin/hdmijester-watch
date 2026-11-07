@@ -120,16 +120,32 @@ class Segment:
                 str(self.unstable))
 
 
+def _describe_displays(sp_output):
+    """Summarise the external display(s) in `system_profiler SPDisplaysDataType` text.
+
+    HDMIJester monitors external HDMI links, so the built-in panel — which
+    system_profiler always lists first — is skipped. Every remaining display is
+    included, so all attached external monitors are shown rather than just one.
+    Returns a sentinel string when the built-in panel is the only display.
+    """
+    externals = []
+    for name, body in re.findall(r'^ {8}(\S.*):\n((?: {10}.*\n?)*)', sp_output, re.M):
+        if 'Connection Type: Internal' in body or 'Built-in' in body:
+            continue
+        res = re.search(r'Resolution: (.*)', body)
+        hz = re.search(r'@ ([\d.]+Hz)', body)
+        detail = ' '.join(p for p in (res.group(1) if res else '',
+                                      hz.group(1) if hz else '') if p)
+        externals.append(f'{name} ({detail})' if detail else name)
+    return ', '.join(externals) if externals else 'no external display detected'
+
+
 def display_mode():
+    """Return a one-line summary of the external display(s) being monitored."""
     try:
         out = subprocess.run(['system_profiler', 'SPDisplaysDataType'],
                              capture_output=True, text=True, timeout=20).stdout
-        names = re.findall(r'^\s{8}(\S.*):$', out, re.M)
-        res = re.findall(r'Resolution: (.*)', out)
-        hz = re.findall(r'@ ([\d.]+Hz)', out)
-        if names:
-            return f'{names[0]} — {res[0] if res else "?"} {hz[0] if hz else ""}'.strip()
-        return 'no external display detected'
+        return _describe_displays(out)
     except Exception as e:  # noqa: BLE001
         return f'(display query failed: {e})'
 
@@ -159,7 +175,13 @@ def main(stdscr):
     mode = {'v': 'querying display…'}
     def refresh_mode():
         mode['v'] = display_mode()
-    threading.Thread(target=refresh_mode, daemon=True).start()
+    def poll_mode():
+        """Refresh the monitored-display label ~every 3 s so plugging or
+        unplugging an external display is reflected without a restart."""
+        while True:
+            refresh_mode()
+            time.sleep(3)
+    threading.Thread(target=poll_mode, daemon=True).start()
 
     segs = [Segment('baseline')]
     err_by_sec = collections.Counter()   # event-time second -> lane-0 errors

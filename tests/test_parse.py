@@ -97,5 +97,50 @@ class SegmentTests(unittest.TestCase):
         self.assertEqual(hw.spark([0, 8], 8), '·█')
 
 
+# system_profiler SPDisplaysDataType excerpts. The built-in panel is always
+# listed first, which is why selecting the first-named display was the bug.
+SP_BUILTIN_ONLY = (
+    "Graphics/Displays:\n\n"
+    "    Apple M4:\n\n"
+    "      Displays:\n"
+    "        Color LCD:\n"
+    "          Display Type: Built-in Liquid Retina Display\n"
+    "          Resolution: 2880 x 1864 Retina\n"
+    "          Main Display: Yes\n"
+    "          Online: Yes\n"
+    "          Connection Type: Internal\n"
+)
+SP_ONE_EXTERNAL = SP_BUILTIN_ONLY + (
+    "        LG ULTRAGEAR:\n"
+    "          Resolution: 3840 x 2160 (2160p/4K UHD 1 - Ultra High Definition)\n"
+    "          UI Looks like: 3840 x 2160 @ 60.00Hz\n"
+    "          Online: Yes\n"
+)
+SP_TWO_EXTERNAL = SP_ONE_EXTERNAL + (
+    "        ASUS MG28U:\n"
+    "          Resolution: 1080 x 1920\n"
+    "          UI Looks like: 1080 x 1920 @ 30.00Hz\n"
+    "          Online: Yes\n"
+)
+
+
+class DisplayModeTests(unittest.TestCase):
+    def test_builtin_only_reports_no_external(self):
+        self.assertEqual(hw._describe_displays(SP_BUILTIN_ONLY),
+                         'no external display detected')
+
+    def test_skips_builtin_and_names_external(self):
+        out = hw._describe_displays(SP_ONE_EXTERNAL)
+        self.assertIn('LG ULTRAGEAR', out)
+        self.assertIn('60.00Hz', out)
+        self.assertNotIn('Color LCD', out)
+
+    def test_lists_every_external_not_just_first(self):
+        out = hw._describe_displays(SP_TWO_EXTERNAL)
+        self.assertIn('LG ULTRAGEAR', out)
+        self.assertIn('ASUS MG28U', out)
+        self.assertNotIn('Color LCD', out)
+
+
 if __name__ == '__main__':
     unittest.main()

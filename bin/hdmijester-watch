@@ -120,6 +120,9 @@ class Segment:
                 str(self.unstable))
 
 
+NO_EXTERNAL = 'no external display detected'
+
+
 def _describe_displays(sp_output):
     """Summarise the external display(s) in `system_profiler SPDisplaysDataType` text.
 
@@ -137,7 +140,7 @@ def _describe_displays(sp_output):
         detail = ' '.join(p for p in (res.group(1) if res else '',
                                       hz.group(1) if hz else '') if p)
         externals.append(f'{name} ({detail})' if detail else name)
-    return ', '.join(externals) if externals else 'no external display detected'
+    return ', '.join(externals) if externals else NO_EXTERNAL
 
 
 def display_mode():
@@ -148,6 +151,22 @@ def display_mode():
         return _describe_displays(out)
     except Exception as e:  # noqa: BLE001
         return f'(display query failed: {e})'
+
+
+def link_state(connected, display_present, rate):
+    """Return the Link-badge severity: 'disconnected' | 'clean' | 'errors' | 'heavy'.
+
+    `display_present` is the authoritative disconnect signal. Some topologies
+    (certain USB-C→HDMI dongles) drop the display without emitting any DCP
+    hotplug event, leaving `connected` stuck True; the badge must not read CLEAN
+    when no external display is actually attached, so a missing display forces
+    'disconnected' regardless of the (stale) log-derived `connected` flag.
+    """
+    if not connected or not display_present:
+        return 'disconnected'
+    if rate == 0:
+        return 'clean'
+    return 'errors' if rate < 10 else 'heavy'
 
 
 SPARK = ' ▁▂▃▄▅▆▇█'
@@ -265,9 +284,9 @@ def main(stdscr):
                 stdscr.addnstr(y, x, s, max(0, W - x - 1), a)
         seg = segs[-1]
         rate = sum(rep_sec)  # reports in last 60 s
-        status = (RED, 'DISCONNECTED') if not connected else \
-                 (GREEN, 'CLEAN') if rate == 0 else \
-                 (YELLOW, 'ERRORS') if rate < 10 else (RED, 'HEAVY ERRORS')
+        badge = {'disconnected': (RED, 'DISCONNECTED'), 'clean': (GREEN, 'CLEAN'),
+                 'errors': (YELLOW, 'ERRORS'), 'heavy': (RED, 'HEAVY ERRORS')}
+        status = badge[link_state(connected, mode['v'] != NO_EXTERNAL, rate)]
         put(0, 0, 'hdmijester-watch', curses.A_BOLD)
         put(0, 12, f'{datetime.now():%H:%M:%S}   {mode["v"]}')
         put(2, 0, 'Link: '); put(2, 6, f' {status[1]} ', status[0] | curses.A_REVERSE | curses.A_BOLD)

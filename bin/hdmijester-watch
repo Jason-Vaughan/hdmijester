@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3
-"""hdmi-watch — live HDMI link-error dashboard for Apple Silicon Macs.
+"""hdmijester-watch — live HDMI link-error dashboard for Apple Silicon Macs.
 
 Polls the unified log for the display controller (DCP) and shows, every second:
   * HDMI Character Error Detection (CED) counts per TMDS lane — bit errors the
@@ -11,7 +11,7 @@ Polls the unified log for the display controller (DCP) and shows, every second:
 Keys:  n = new segment (type a label, Enter)   r = reset current segment
        q = quit (summary is printed and saved)
 
-Every event is appended to <repo>/captures/hdmi-watch-<start>.csv for evidence.
+Every event is appended to <repo>/captures/hdmijester-watch-<start>.csv for evidence.
 """
 import collections, curses, csv, os, queue, re, subprocess, sys, threading, time
 from datetime import datetime
@@ -30,7 +30,14 @@ events = queue.Queue()
 
 
 # Captures live in the repo (resolved through the ~/bin symlink), git-ignored.
-CAPTURES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'captures')
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+CAPTURES = os.path.join(REPO_ROOT, 'captures')
+
+
+def read_version():
+    """The project version, from TangleClaw's version file (kept in sync with CHANGELOG.md)."""
+    with open(os.path.join(REPO_ROOT, '.tangleclaw', 'project-version.txt')) as f:
+        return f.readline().split(':', 1)[1].strip()
 
 RE_TS = re.compile(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)')
 
@@ -144,7 +151,7 @@ def main(stdscr):
 
     t0 = datetime.now()
     os.makedirs(CAPTURES, exist_ok=True)
-    csv_path = os.path.join(CAPTURES, f'hdmi-watch-{t0:%Y%m%d-%H%M%S}.csv')
+    csv_path = os.path.join(CAPTURES, f'hdmijester-watch-{t0:%Y%m%d-%H%M%S}.csv')
     fh = open(csv_path, 'w', newline=''); w = csv.writer(fh)
     w.writerow(['time', 'segment', 'event', 'lane0', 'lane1', 'lane2', 'detail'])
 
@@ -239,7 +246,7 @@ def main(stdscr):
         status = (RED, 'DISCONNECTED') if not connected else \
                  (GREEN, 'CLEAN') if rate == 0 else \
                  (YELLOW, 'ERRORS') if rate < 10 else (RED, 'HEAVY ERRORS')
-        put(0, 0, 'hdmi-watch', curses.A_BOLD)
+        put(0, 0, 'hdmijester-watch', curses.A_BOLD)
         put(0, 12, f'{datetime.now():%H:%M:%S}   {mode["v"]}')
         put(2, 0, 'Link: '); put(2, 6, f' {status[1]} ', status[0] | curses.A_REVERSE | curses.A_BOLD)
         put(2, 24, f'segment: {seg.label}', curses.A_BOLD)
@@ -267,7 +274,7 @@ def main(stdscr):
         for i, (t, m, a) in enumerate(log):
             put(y + 1 + i, 0, f'{t}  {m}', a)
         if stream_dead is not None:
-            put(H - 3, 0, f'log reader exited ({stream_dead}) — restart hdmi-watch', RED)
+            put(H - 3, 0, f'log reader exited ({stream_dead}) — restart hdmijester-watch', RED)
         put(H - 2, 0, f'csv: {csv_path}', curses.A_DIM)
         if typing is not None:
             put(H - 1 if H > 1 else 0, 0, f'new segment label (e.g. "cable B, HDMI2"): {typing}_', CYAN | curses.A_BOLD)
@@ -281,10 +288,13 @@ def main(stdscr):
 
 
 if __name__ == '__main__':
+    if '--version' in sys.argv[1:]:
+        print(read_version())
+        sys.exit(0)
     if sys.platform != 'darwin':
         sys.exit('macOS only')
     segs, path = curses.wrapper(main)
-    print('\nhdmi-watch summary')
+    print('\nhdmijester-watch summary')
     print(f'{"label":22} {"time":>6} {"rep/min":>7} {"err/min":>8} {"avgL0":>5} {"maxL0/1/2":>9} {"disc":>4} {"unst":>4}')
     for s in segs:
         r = s.row()

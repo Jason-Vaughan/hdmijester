@@ -1,4 +1,4 @@
-# How HDMI-Watch works
+# How HDMIJester works
 
 ## Where the data comes from
 
@@ -50,8 +50,8 @@ A reconnect (hotplug 0 → 1) starts a new segment automatically, so swapping a 
 
 | Path | Purpose |
 |---|---|
-| `bin/hdmi-watch` | Curses dashboard (Python 3, stdlib only) |
-| `bin/hdmi-snapshot` | Evidence file: hardware, per-minute summary, raw events (bash + awk) |
+| `bin/hdmijester-watch` | Curses dashboard (Python 3, stdlib only) |
+| `bin/hdmijester-snapshot` | Evidence file: hardware, per-minute summary, raw events (bash + awk) |
 | `tests/test_parse.py` | Parser tests on real log lines |
-| `captures/hdmi-snapshot-*.txt` (git-ignored) | Evidence snapshots |
-| `captures/hdmi-watch-*.csv` (git-ignored) | Per-run event log: `time, segment, event, lane0, lane1, lane2, detail` |
+| `captures/hdmijester-snapshot-*.txt` (git-ignored) | Evidence snapshots |
+| `captures/hdmijester-watch-*.csv` (git-ignored) | Per-run event log: `time, segment, event, lane0, lane1, lane2, detail` |

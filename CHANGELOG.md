@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to HDMI-Watch are documented in this file.
+All notable changes to HDMIJester are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Project folder renamed to `~/Documents/Projects/hdmi-watch`. All output (CSV runs, snapshots) now goes to the git-ignored `captures/` directory in the repo instead of the Desktop.
+- Renamed the project and its CLI from HDMI-Watch (`hdmi-watch` / `hdmi-snapshot`) to **HDMIJester** (`hdmijester-watch` / `hdmijester-snapshot`) ahead of its public release.
+
+### Added
+
+- `--version` flag on `hdmijester-watch` and `hdmijester-snapshot`, printing the project version from `.tangleclaw/project-version.txt`.
+- Logo, hosted in [project-assets](https://github.com/Jason-Vaughan/project-assets) and embedded in the README.
+- AGPL-3.0 `LICENSE` for public release.
 
 ## [0.1.0] - 2026-10-14
 

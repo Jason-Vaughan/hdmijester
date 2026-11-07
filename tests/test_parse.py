@@ -1,4 +1,4 @@
-"""Parser tests for bin/hdmi-watch, using real log lines from a Mac Studio (M1 Max).
+"""Parser tests for bin/hdmijester-watch, using real log lines from a Mac Studio (M1 Max).
 
 Run: python3 -m unittest discover -s tests
 """
@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-_loader = importlib.machinery.SourceFileLoader('hdmi_watch', str(ROOT / 'bin' / 'hdmi-watch'))
+_loader = importlib.machinery.SourceFileLoader('hdmi_watch', str(ROOT / 'bin' / 'hdmijester-watch'))
 _spec = importlib.util.spec_from_loader('hdmi_watch', _loader)
 hw = importlib.util.module_from_spec(_spec)
 _loader.exec_module(hw)

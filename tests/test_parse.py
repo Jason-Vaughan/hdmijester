@@ -122,6 +122,104 @@ SP_TWO_EXTERNAL = SP_ONE_EXTERNAL + (
     "          UI Looks like: 1080 x 1920 @ 30.00Hz\n"
     "          Online: Yes\n"
 )
+SP_DOWNGRADE = SP_BUILTIN_ONLY + (
+    "        LG ULTRAGEAR:\n"
+    "          Resolution: 1920 x 1080 (1080p FHD - Full High Definition)\n"
+    "          UI Looks like: 1920 x 1080 @ 30.00Hz\n"
+    "          Online: Yes\n"
+)
+
+
+class ParseExternalDisplaysTests(unittest.TestCase):
+    def test_one_external_mode(self):
+        out = hw._parse_external_displays(SP_ONE_EXTERNAL)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]['name'], 'LG ULTRAGEAR')
+        self.assertEqual(out[0]['mode'], (3840 * 2160, 60.0))
+
+    def test_two_externals_tracked_independently(self):
+        out = hw._parse_external_displays(SP_TWO_EXTERNAL)
+        modes = {d['name']: d['mode'] for d in out}
+        self.assertEqual(modes['LG ULTRAGEAR'], (3840 * 2160, 60.0))
+        self.assertEqual(modes['ASUS MG28U'], (1080 * 1920, 30.0))
+
+    def test_lower_mode_than_4k60(self):
+        out = hw._parse_external_displays(SP_DOWNGRADE)
+        self.assertEqual(out[0]['mode'], (1920 * 1080, 30.0))
+        self.assertLess(out[0]['mode'], (3840 * 2160, 60.0))
+
+    def test_builtin_only_yields_no_records(self):
+        self.assertEqual(hw._parse_external_displays(SP_BUILTIN_ONLY), [])
+
+
+class DisplayHealthTests(unittest.TestCase):
+    def test_first_poll_establishes_baseline(self):
+        health = hw.update_health({}, {'LG': (100, 60.0)})
+        h = health['LG']
+        self.assertEqual(h.best_mode, (100, 60.0))
+        self.assertEqual(h.downgrades, 0)
+        self.assertEqual(h.flaps, 0)
+
+    def test_mode_drop_counts_one_downgrade(self):
+        health = hw.update_health({}, {'LG': (100, 60.0)})
+        hw.update_health(health, {'LG': (100, 30.0)})
+        self.assertEqual(health['LG'].downgrades, 1)
+        self.assertEqual(health['LG'].best_mode, (100, 60.0))
+
+    def test_oscillation_counts_each_drop(self):
+        health = hw.update_health({}, {'LG': (100, 60.0)})
+        hw.update_health(health, {'LG': (100, 30.0)})
+        hw.update_health(health, {'LG': (100, 60.0)})
+        hw.update_health(health, {'LG': (100, 30.0)})
+        self.assertEqual(health['LG'].downgrades, 2)
+
+    def test_disappearance_counts_a_flap(self):
+        health = hw.update_health({}, {'LG': (100, 60.0)})
+        hw.update_health(health, {})
+        self.assertEqual(health['LG'].flaps, 1)
+        self.assertFalse(health['LG'].present)
+
+    def test_reappearance_does_not_double_count_flap(self):
+        health = hw.update_health({}, {'LG': (100, 60.0)})
+        hw.update_health(health, {})
+        hw.update_health(health, {'LG': (100, 60.0)})
+        hw.update_health(health, {})
+        self.assertEqual(health['LG'].flaps, 2)
+
+    def test_two_displays_tracked_independently(self):
+        health = hw.update_health({}, {'LG': (100, 60.0), 'ASUS': (50, 30.0)})
+        hw.update_health(health, {'LG': (100, 30.0), 'ASUS': (50, 30.0)})
+        self.assertEqual(health['LG'].downgrades, 1)
+        self.assertEqual(health['ASUS'].downgrades, 0)
+
+
+class SignalSourceTests(unittest.TestCase):
+    def test_poll_label_before_any_ced_evidence(self):
+        key, label = hw.signal_source(False)
+        self.assertEqual(key, 'poll')
+        self.assertIn('poll', label)
+
+    def test_ced_confirmed_once_real_event_seen(self):
+        key, label = hw.signal_source(True)
+        self.assertEqual(key, 'ced')
+        self.assertIn('CED', label)
+
+
+class PollHealthStateTests(unittest.TestCase):
+    def test_disconnected_wins_over_everything(self):
+        self.assertEqual(hw.poll_health_state(False, []), 'disconnected')
+
+    def test_ok_when_present_and_no_issues(self):
+        h = hw.DisplayHealth('LG')
+        self.assertEqual(hw.poll_health_state(True, [h]), 'ok')
+
+    def test_degraded_on_downgrade(self):
+        h = hw.DisplayHealth('LG'); h.downgrades = 1
+        self.assertEqual(hw.poll_health_state(True, [h]), 'degraded')
+
+    def test_degraded_on_flap(self):
+        h = hw.DisplayHealth('LG'); h.flaps = 1
+        self.assertEqual(hw.poll_health_state(True, [h]), 'degraded')
 
 
 class DisplayModeTests(unittest.TestCase):

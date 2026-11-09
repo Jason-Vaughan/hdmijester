@@ -34,6 +34,19 @@ So `poll_lines()` runs `/usr/bin/log show --start <last-seen − 4 s>` about onc
 
 Use `/usr/bin/log` explicitly: zsh has a built-in `log` command that shadows it and silently returns nothing.
 
+## Health signal tiers
+
+CED only exists when the Mac's own DCP drives the HDMI link (the built-in port). A USB-C→HDMI dongle, dock, or native DisplayPort path puts the converter chip outside the Mac, and macOS logs nothing about it — confirmed by testing: a dongle and a dock alt-mode path both produced zero DCP log lines over 90 minutes while visibly glitching. Rather than keep showing a `CLEAN` badge that is really just "never saw an error because it can't see anything," HDMIJester tracks which signal is actually backing the badge:
+
+| Tier | Signal | Fidelity |
+|---|---|---|
+| CED | Per-lane bit-error counts from the DCP log (as above) | bit-level — gold |
+| Poll | Each display's resolution/refresh and connect/disconnect history, from the existing `system_profiler` poll | coarse but real |
+
+**The upgrade rule is evidence-only, not a guess.** `signal_source()` starts every run at `poll` and permanently flips to `ced` the instant a real `ced` or `linkchg` event is parsed from the log — never the other way around, since seeing one proves the gold path is active. An ioreg-based proactive classifier (auto-detecting built-in vs. dongle vs. dock before any log evidence arrives) was investigated and deferred: the converter-class names originally proposed for it (`AppleDCPMCDP29XX`, `AppleDCPAgileCDIDPDisplay`, `AppleDCPDP2HDMI`) turned out not to be real `ioreg -c`-matchable IOKit classes — verified directly on a Mac Studio, where none of the three appear in `ioreg -l` and `ioreg -c <class>` doesn't filter to empty for a non-matching class anyway. Building that classifier needs real `ioreg` fixtures captured from dongle/dock hardware first.
+
+On the poll tier, `DisplayHealth` (keyed by display name, since that's the only stable identifier available without ioreg node correlation) tracks, per display: `best_mode` (the highest resolution×refresh ever seen — only increases, so a cable that fails and later "recovers" still shows the failure happened), `current_mode`, a `downgrades` count (current mode below best mode), and a `flaps` count (present → absent transitions). `update_health()` advances this on the same ~3 s `system_profiler` poll that already drives the header display label — no extra thread. These counts are global for the run and are **not** reset by `n`/`r` (unlike a `Segment`), because catching a flap across the whole session is the point.
+
 ## Segments
 
 A segment is one test condition. The dashboard keeps:

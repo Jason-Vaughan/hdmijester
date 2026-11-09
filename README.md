@@ -43,9 +43,11 @@ hdmijester-watch
 
 | Area | Meaning |
 |---|---|
-| **Link** badge | `CLEAN` (no error reports in the last 60 s), `ERRORS`, `HEAVY ERRORS` (≥10/min), `DISCONNECTED` |
+| **Monitoring via** | Which signal is backing the badge: `CED (HDMI)` once a real error-detection log line has been seen, otherwise `mode/flap poll` |
+| **Link** badge | On CED: `CLEAN` (no error reports in the last 60 s), `ERRORS`, `HEAVY ERRORS` (≥10/min). On poll (no CED available): `OK (poll)`, `DEGRADED (poll)` (a mode downgrade or disconnect/flap seen). Both: `DISCONNECTED` |
 | Error reports, last 60 s | CED reports seen in the last minute. **0 on a healthy link.** |
 | Last CED counts `[L0 L1 L2]` | The latest error count for each TMDS data lane |
+| Display health | Per display: best-ever and current resolution/refresh, downgrade count, flap (disconnect) count — tracked even when CED is unavailable |
 | Graph | Lane-0 errors per second over the last 60 s (newest on the right) |
 | Segments table | One row per test: duration, reports/min, errors/min, average lane-0 count, max per lane, disconnects, "link unstable" reports |
 | Events | Disconnects, reconnects, HPD changes, link-unstable reports |
@@ -92,7 +94,9 @@ The parser tests use real log lines captured from the Mac Studio.
 
 ## Limitations
 
-- **HDMI only.** CED is an HDMI feature. Over USB-C/DisplayPort you still see disconnects but no error counts.
+- **Bit-level CED detection requires built-in HDMI.** Over a USB-C→HDMI dongle, dock, or native DisplayPort, the converter chip lives outside the Mac and macOS logs nothing about it. HDMIJester falls back to a coarser signal — tracking each display's resolution/refresh and connect/disconnect flapping from its existing display poll — so it catches a cable bad enough to force a lower mode or drop the link, but not occasional bit errors while the link holds its mode. The **Monitoring via** line always says which signal is active; the badge never shows a bare `CLEAN` implying coverage it doesn't have.
+- **Transport is detected by evidence, not guessed.** The badge reads `mode/flap poll` until a real CED/HDMI-link-status log line actually arrives — including on the built-in port, for the first few seconds after launch — then permanently switches to `CED (HDMI)`.
+- **Display health is keyed by name.** Two identically-named monitors, or a generic name reused across replugs, won't be told apart.
 - **The numbers are only as good as Apple's log messages.** They are undocumented and may change between macOS releases; a format change would silently show `CLEAN`. Confirm with `hdmijester-snapshot` (non-zero raw events) after OS updates.
 - **2–3 s latency** because of the polling approach.
 - **Built-in displays aren't covered**, and only display slot 1 is tracked for hotplug.

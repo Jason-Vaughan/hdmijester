@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Transport-agnostic health layer: when CED can't reach macOS (USB-C→HDMI dongle/dock, native DisplayPort), `hdmijester-watch` tracks each external display's best-seen and current mode and flap/downgrade counts from the existing `system_profiler` poll, labels which signal is active (`Monitoring via: CED (HDMI)` vs `mode/flap poll`), and never shows a bare `CLEAN`/`OK` badge implying coverage it doesn't have. Built-in HDMI's CED behavior is unchanged. (#7)
 - `--version` flag on `hdmijester-watch` and `hdmijester-snapshot`, printing the project version from `.tangleclaw/project-version.txt`.
 - Logo, hosted in [project-assets](https://github.com/Jason-Vaughan/project-assets) and embedded in the README.
 - AGPL-3.0 `LICENSE` for public release.

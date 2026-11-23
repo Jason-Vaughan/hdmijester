@@ -123,34 +123,138 @@ class Segment:
 NO_EXTERNAL = 'no external display detected'
 
 
-def _describe_displays(sp_output):
-    """Summarise the external display(s) in `system_profiler SPDisplaysDataType` text.
+def _parse_external_displays(sp_output):
+    """Parse every external display in `system_profiler SPDisplaysDataType` text.
 
     HDMIJester monitors external HDMI links, so the built-in panel — which
-    system_profiler always lists first — is skipped. Every remaining display is
-    included, so all attached external monitors are shown rather than just one.
-    Returns a sentinel string when the built-in panel is the only display.
+    system_profiler always lists first — is skipped. Returns a list of
+    {'name', 'detail', 'mode'} records, one per remaining display, in the
+    order system_profiler lists them. `mode` is a (pixels, hz) tuple used to
+    compare display modes over time (downgrade/flap detection); it is
+    (0, 0.0) when the resolution/refresh can't be parsed.
     """
-    externals = []
+    displays = []
     for name, body in re.findall(r'^ {8}(\S.*):\n((?: {10}.*\n?)*)', sp_output, re.M):
         if 'Connection Type: Internal' in body or 'Built-in' in body:
             continue
         res = re.search(r'Resolution: (.*)', body)
-        hz = re.search(r'@ ([\d.]+Hz)', body)
+        hz = re.search(r'@ ([\d.]+)Hz', body)
         detail = ' '.join(p for p in (res.group(1) if res else '',
-                                      hz.group(1) if hz else '') if p)
-        externals.append(f'{name} ({detail})' if detail else name)
+                                      f'{hz.group(1)}Hz' if hz else '') if p)
+        pixels = 0
+        if res:
+            dims = re.findall(r'(\d+)\s*x\s*(\d+)', res.group(1))
+            if dims:
+                w, h = (int(x) for x in dims[0])
+                pixels = w * h
+        mode = (pixels, float(hz.group(1)) if hz else 0.0)
+        displays.append({'name': name, 'detail': detail, 'mode': mode})
+    return displays
+
+
+def _describe_displays(sp_output):
+    """Summarise the external display(s) in `system_profiler SPDisplaysDataType` text.
+
+    Every attached external monitor is included, so all of them are shown
+    rather than just one. Returns a sentinel string when the built-in panel
+    is the only display.
+    """
+    displays = _parse_external_displays(sp_output)
+    externals = [f"{d['name']} ({d['detail']})" if d['detail'] else d['name']
+                 for d in displays]
     return ', '.join(externals) if externals else NO_EXTERNAL
 
 
-def display_mode():
-    """Return a one-line summary of the external display(s) being monitored."""
+def query_displays():
+    """Query system_profiler once; return (summary string, display records).
+
+    The summary is `_describe_displays()`'s one-line text for the header; the
+    records are `_parse_external_displays()`'s structured form, used to
+    advance the per-display health tracker. Both come from a single
+    subprocess call so the two never disagree about what's attached.
+    """
     try:
         out = subprocess.run(['system_profiler', 'SPDisplaysDataType'],
                              capture_output=True, text=True, timeout=20).stdout
-        return _describe_displays(out)
+        return _describe_displays(out), _parse_external_displays(out)
     except Exception as e:  # noqa: BLE001
-        return f'(display query failed: {e})'
+        return f'(display query failed: {e})', []
+
+
+class DisplayHealth:
+    """Tracks one external display's mode history across the run.
+
+    `best_mode` only ever increases, so a cable that fails and later
+    "recovers" its original mode still shows that the downgrade happened.
+    Counts are global for the run, not reset by `r`/`n` (unlike Segment) —
+    the flap counter's whole purpose is catching reconnects across the
+    session, independent of whichever test segment is currently active.
+    """
+
+    def __init__(self, name):
+        self.name = name
+        self.best_mode = (0, 0.0)
+        self.current_mode = (0, 0.0)
+        self.present = True
+        self.downgrades = 0
+        self.flaps = 0
+
+    def line(self):
+        best = f'{self.best_mode[0]}px@{self.best_mode[1]:g}Hz'
+        cur = 'same' if self.current_mode == self.best_mode else f'{self.current_mode[0]}px@{self.current_mode[1]:g}Hz'
+        return f'{self.name}: best {best}, now {cur}, dg:{self.downgrades} fl:{self.flaps}'
+
+
+def update_health(health, present_by_name):
+    """Advance `health` (dict: name -> DisplayHealth, mutated in place) given
+    this poll's {name: mode} snapshot from `_parse_external_displays()`.
+
+    A display's mode dropping below its own best-ever mode counts one
+    downgrade on that poll. A display vanishing (present -> absent) counts
+    one flap; reappearing does not (flaps count disappearances, not returns).
+    Pure given explicit state in/out — no I/O. Returns `health`.
+    """
+    for name, mode in present_by_name.items():
+        h = health.setdefault(name, DisplayHealth(name))
+        if not h.present:
+            h.present = True
+        h.current_mode = mode
+        if mode > h.best_mode:
+            h.best_mode = mode
+        elif mode < h.best_mode:
+            h.downgrades += 1
+    for name, h in health.items():
+        if name not in present_by_name and h.present:
+            h.present = False
+            h.flaps += 1
+    return health
+
+
+def signal_source(seen_ced_ever):
+    """Which health signal is currently backing the Link badge.
+
+    Evidence-only: starts as 'poll' on any connection and permanently
+    upgrades to 'ced' the instant a real CED/linkchg log line is observed.
+    It never reverts, because seeing one proves the gold (built-in HDMI)
+    path is active for the rest of the run.
+    """
+    if seen_ced_ever:
+        return 'ced', 'Monitoring via: CED (HDMI)'
+    return 'poll', 'Monitoring via: mode/flap poll — CED not seen yet'
+
+
+def poll_health_state(display_present, health_records):
+    """Badge severity when CED isn't available: 'disconnected' | 'ok' | 'degraded'.
+
+    'degraded' fires on any downgrade or flap seen so far on any tracked
+    display. There is no 'heavy' tier here — poll fidelity is coarse by
+    design, so this is an honest limitation rather than a missing feature.
+    """
+    if not display_present:
+        return 'disconnected'
+    if any(h.downgrades or h.flaps for h in health_records):
+        return 'degraded'
+    return 'ok'
 
 
 def link_state(connected, display_present, rate):
@@ -192,11 +296,15 @@ def main(stdscr):
 
     threading.Thread(target=reader, daemon=True).start()
     mode = {'v': 'querying display…'}
+    health = {}             # display name -> DisplayHealth
+    transport = {'ever_ced': False}
     def refresh_mode():
-        mode['v'] = display_mode()
+        mode['v'], displays = query_displays()
+        update_health(health, {d['name']: d['mode'] for d in displays})
     def poll_mode():
-        """Refresh the monitored-display label ~every 3 s so plugging or
-        unplugging an external display is reflected without a restart."""
+        """Refresh the monitored-display label and per-display health ~every
+        3 s so plugging or unplugging an external display is reflected
+        without a restart."""
         while True:
             refresh_mode()
             time.sleep(3)
@@ -222,6 +330,7 @@ def main(stdscr):
                 seg = segs[-1]
                 stamp = datetime.fromtimestamp(ts).strftime('%H:%M:%S.%f')[:-3]
                 if kind == 'ced':
+                    transport['ever_ced'] = True
                     seg.ced_reports += 1
                     rep_by_sec[int(ts)] += 1; err_by_sec[int(ts)] += val[0]
                     for i in range(3):
@@ -229,6 +338,7 @@ def main(stdscr):
                     last_ced, last_ced_t = val, ts
                     w.writerow([stamp, seg.label, 'ced', *val, ''])
                 elif kind == 'linkchg':
+                    transport['ever_ced'] = True
                     seg.linkchg += 1
                 elif kind == 'hotplug':
                     if val == 0 and connected:
@@ -284,11 +394,19 @@ def main(stdscr):
                 stdscr.addnstr(y, x, s, max(0, W - x - 1), a)
         seg = segs[-1]
         rate = sum(rep_sec)  # reports in last 60 s
-        badge = {'disconnected': (RED, 'DISCONNECTED'), 'clean': (GREEN, 'CLEAN'),
-                 'errors': (YELLOW, 'ERRORS'), 'heavy': (RED, 'HEAVY ERRORS')}
-        status = badge[link_state(connected, mode['v'] != NO_EXTERNAL, rate)]
+        display_present = mode['v'] != NO_EXTERNAL
+        src_key, src_label = signal_source(transport['ever_ced'])
+        if src_key == 'ced':
+            badge = {'disconnected': (RED, 'DISCONNECTED'), 'clean': (GREEN, 'CLEAN'),
+                     'errors': (YELLOW, 'ERRORS'), 'heavy': (RED, 'HEAVY ERRORS')}
+            status = badge[link_state(connected, display_present, rate)]
+        else:
+            badge = {'disconnected': (RED, 'DISCONNECTED'), 'ok': (GREEN, 'OK (poll)'),
+                     'degraded': (YELLOW, 'DEGRADED (poll)')}
+            status = badge[poll_health_state(display_present, health.values())]
         put(0, 0, 'hdmijester-watch', curses.A_BOLD)
         put(0, 12, f'{datetime.now():%H:%M:%S}   {mode["v"]}')
+        put(1, 0, src_label, curses.A_DIM)
         put(2, 0, 'Link: '); put(2, 6, f' {status[1]} ', status[0] | curses.A_REVERSE | curses.A_BOLD)
         put(2, 24, f'segment: {seg.label}', curses.A_BOLD)
         put(4, 0, 'Error reports, last 60 s:'); put(4, 27, f'{rate:4d}', status[0] | curses.A_BOLD)
@@ -298,19 +416,21 @@ def main(stdscr):
         put(6, 0, 'This segment:')
         put(6, 27, f'{seg.ced_reports} reports, {seg.ced_reports/seg.minutes():.1f}/min, '
                    f'lane max {seg.lane_max}, disconnects {seg.disconnects}')
-        put(8, 0, 'lane-0 errors / sec (60 s, newest right):')
-        put(9, 0, spark(per_sec, max(per_sec) or 1), YELLOW)
-        put(10, 0, f'peak {max(per_sec)}/s')
+        put(7, 0, 'Display health:')
+        put(7, 27, '; '.join(h.line() for h in health.values()) if health else 'no external display tracked')
+        put(9, 0, 'lane-0 errors / sec (60 s, newest right):')
+        put(10, 0, spark(per_sec, max(per_sec) or 1), YELLOW)
+        put(11, 0, f'peak {max(per_sec)}/s')
 
-        put(12, 0, 'Segments', curses.A_BOLD | curses.A_UNDERLINE)
+        put(13, 0, 'Segments', curses.A_BOLD | curses.A_UNDERLINE)
         hdr = f'{"label":22} {"time":>6} {"rep/min":>7} {"err/min":>8} {"avgL0":>5} {"maxL0/1/2":>9} {"disc":>4} {"unst":>4}'
-        put(13, 0, hdr, curses.A_DIM)
-        rows = segs[-max(1, H - 26):]
+        put(14, 0, hdr, curses.A_DIM)
+        rows = segs[-max(1, H - 27):]
         for i, s in enumerate(rows):
             r = s.row()
             line = f'{r[0]:22} {r[1]:>6} {r[2]:>7} {r[3]:>8} {r[4]:>5} {r[5]:>9} {r[6]:>4} {r[7]:>4}'
-            put(14 + i, 0, line, curses.A_BOLD if s is seg else 0)
-        y = 15 + len(rows)
+            put(15 + i, 0, line, curses.A_BOLD if s is seg else 0)
+        y = 16 + len(rows)
         put(y, 0, 'Events', curses.A_BOLD | curses.A_UNDERLINE)
         for i, (t, m, a) in enumerate(log):
             put(y + 1 + i, 0, f'{t}  {m}', a)
